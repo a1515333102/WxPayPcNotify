@@ -19,10 +19,17 @@ python WxPayPcNotify.py
 
 ## 打包 exe
 
+本地：
+
 ```powershell
 .\build_exe.ps1
 # 输出：dist\WxPayPcNotify.exe
 ```
+
+GitHub Actions（仓库公开后可用）：
+
+- 推送到 `main` / 开 PR / 手动 Run workflow → 自动打 Windows exe，在 Actions 里下载 Artifact
+- 打 tag 发布：`git tag v1.0.0 && git push origin v1.0.0` → 自动创建 Release 并附带 `WxPayPcNotify.exe`
 
 ## 使用注意
 
