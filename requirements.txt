@@ -1,0 +1,6 @@
+uiautomation
+requests
+Pillow
+numpy
+rapidocr-onnxruntime
+pywin32
