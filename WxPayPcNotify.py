@@ -145,43 +145,83 @@ def ocr_text(img):
 
 
 def parse_payment(text):
-    flat = re.sub(r"\s+", "", text).replace("¥", "￥")
+    """
+    兼容两种版式：
+    1) 旧版聊天：收款金额￥x / 来自xx到账时间xx备注
+    2) 新版收款助手卡片：收款到账通知 + 09月14日 14:27 + 收款金额 / ￥1.00
+       （个人收款服务通常没有「来自」）
+    """
+    # 去掉易干扰的底部导航 / 按钮文案
+    noise = (
+        "经营指南", "小账本", "收款码", "查看详情", "查看经营报表",
+        "个人收款服务", "点击可查看详情", "已存入零钱",
+    )
+    cleaned = text or ""
+    for n in noise:
+        cleaned = cleaned.replace(n, " ")
+
+    flat = re.sub(r"\s+", "", cleaned).replace("¥", "￥")
 
     amount = None
     sender = None
     timestamp = None
 
-    m = re.search(r"收款金额￥?([\d]+(?:\.[\d]+)?)", flat)
+    # —— 金额 ——
+    m = re.search(r"收款金额￥?\s*([\d]+(?:\.[\d]+)?)", flat)
     if not m:
-        # 常见模板：「微信支付收款X.XX元」
         m = re.search(r"微信支付收款([\d]+(?:\.[\d]+)?)元", flat)
     if not m:
-        m = re.search(r"收款￥?([\d]+(?:\.[\d]+)?)", flat)
+        # 卡片常见：收款金额 与 ￥1.00 分行，压扁后为 收款金额￥1.00
+        m = re.search(r"收款到账通知.*?￥([\d]+(?:\.[\d]+)?)", flat)
+    if not m:
+        m = re.search(r"￥([\d]+(?:\.[\d]+)?)", flat)
     if m:
         amount = m.group(1)
 
+    # —— 时间 ——
+    # 新版卡片：收款到账通知 下方直接是 09月14日 14:27（无「到账时间」四字）
+    m = re.search(
+        r"收款到账通知"
+        r"(\d{1,2}月\d{1,2}日\d{1,2}:\d{2}(?::\d{2})?)",
+        flat,
+    )
+    if not m:
+        m = re.search(
+            r"到账时间[:：]?"
+            r"([0-9]{4}[-/年]?[0-9]{1,2}[-/月][0-9]{1,2}日?\d{1,2}:\d{2}(?::\d{2})?"
+            r"|"
+            r"\d{1,2}月\d{1,2}日\d{1,2}:\d{2}(?::\d{2})?)",
+            flat,
+        )
+    if not m:
+        # 兜底：整段里找「X月X日 HH:MM」，优先靠近「收款」
+        m = re.search(r"(\d{1,2}月\d{1,2}日\d{1,2}:\d{2}(?::\d{2})?)", flat)
+    if m:
+        timestamp = m.group(1)
+        # 可读性：09月14日14:27 → 09月14日 14:27；2026-09-1412:00 → 带空格
+        timestamp = re.sub(r"(日)(\d)", r"\1 \2", timestamp)
+        timestamp = re.sub(r"(\d{4}-\d{1,2}-\d{1,2})(\d{1,2}:)", r"\1 \2", timestamp)
+
+    # —— 来自（旧版才有；新版个人收款助手通常没有）——
     m = re.search(r"来自(.+?)到账时间", flat)
     if m:
         sender = m.group(1).strip()
     else:
-        m = re.search(r"(?:来自|付款方|付款人)[:：]?([^\n到账备注]+)", text)
+        m = re.search(r"(?:来自|付款方|付款人)[:：]?([^\n到账备注汇总]{1,30})", cleaned)
         if m:
             sender = re.sub(r"\s+", "", m.group(1)).strip()
 
-    m = re.search(r"到账时间(.+?)(?:备注|$)", flat)
-    if m:
-        timestamp = m.group(1).strip()
-    else:
-        m = re.search(
-            r"(?:到账时间|时间)[:：]?\s*"
-            r"([0-9]{4}[-/年][0-9]{1,2}[-/月][0-9]{1,2}日?\s*[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)",
-            text,
-        )
-        if m:
-            timestamp = re.sub(r"\s+", " ", m.group(1)).strip()
+    # 过滤把导航文案当成「来自」
+    if sender and any(x in sender for x in ("经营", "账本", "指南", "收款码", "查看")):
+        sender = ""
 
     if not amount:
         return None
+
+    # 必须像一笔到账通知：有「收款金额/到账通知」或能解析出卡片时间，避免误报
+    if ("收款金额" not in flat) and ("收款到账通知" not in flat) and ("微信支付收款" not in flat):
+        return None
+
     return {
         "amount": amount,
         "sender": sender or "",
@@ -206,7 +246,9 @@ def notify_if_new(info):
         return False
     _last_notify_key = key
     print(
-        f"收款金额: ￥{info['amount']}, 来自: {info['sender']}, 到账时间: {info['timestamp']}"
+        f"收款金额: ￥{info['amount']}, "
+        f"来自: {info['sender'] or '(无/个人收款)'}, "
+        f"到账时间: {info['timestamp'] or '(未识别)'}"
     )
     print("-----------------------------------------------------------------")
     print("持续监听中...")
